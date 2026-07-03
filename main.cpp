@@ -29,6 +29,12 @@ int main() {
   };
   vkCreateInstance(&instanceCreateInfo, nullptr, &instance);
 
+  uint32_t physicalDeviceCount;
+  vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr);
+  std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+  vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data());
+  VkPhysicalDevice physicalDevice = physicalDevices[0];
+
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
   }
