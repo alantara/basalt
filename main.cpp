@@ -1,11 +1,15 @@
-#include <GLFW/glfw3.h>
 #include <iostream>
+#include <limits>
 #include <vector>
+#include <math.h>
+#include <algorithm>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
+#include <GLFW/glfw3.h>
 
 int main() {
   glfwInit();
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   GLFWwindow* window = glfwCreateWindow(680, 420, "Vulkan 1.3", nullptr, nullptr);
 
   VkInstance instance;
@@ -15,6 +19,7 @@ int main() {
   uint32_t glfwExtensionCount;
   const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
   instanceExtensions.insert(instanceExtensions.end(), glfwExtensions, glfwExtensions + glfwExtensionCount);
+  instanceExtensions.push_back("VK_KHR_get_surface_capabilities2");
   VkApplicationInfo applicationInfo{
       .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
       .pApplicationName = "Application Test",
@@ -86,10 +91,61 @@ int main() {
   vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device);
   vkGetDeviceQueue(device, graphicsQueueFamily, 0, &graphicsQueue);
 
+  VkSurfaceKHR surface;
+  std::cout << glfwCreateWindowSurface(instance, window, nullptr, &surface);
+
+  VkSwapchainKHR swapchain;
+  VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo{
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
+      .surface = surface,
+  };
+  VkSurfaceCapabilities2KHR surfaceCapabilities{VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
+  vkGetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice, &surfaceInfo, &surfaceCapabilities);
+  uint32_t minImageCount = surfaceCapabilities.surfaceCapabilities.minImageCount + 1;
+  VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_SRGB;
+  VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+  VkExtent2D extent = surfaceCapabilities.surfaceCapabilities.currentExtent;
+  if (extent.width == std::numeric_limits<uint32_t>::max()) {
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    extent = VkExtent2D{
+        .width = std::clamp<uint32_t>(width, surfaceCapabilities.surfaceCapabilities.minImageExtent.width, surfaceCapabilities.surfaceCapabilities.minImageExtent.width),
+        .height = std::clamp<uint32_t>(height, surfaceCapabilities.surfaceCapabilities.minImageExtent.height, surfaceCapabilities.surfaceCapabilities.minImageExtent.height),
+    };
+  }
+  VkSurfaceTransformFlagBitsKHR surfaceTransform = surfaceCapabilities.surfaceCapabilities.currentTransform;
+  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  VkSwapchainCreateInfoKHR swapchainCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+      .surface = surface,
+      .minImageCount = minImageCount,
+      .imageFormat = surfaceFormat,
+      .imageColorSpace = colorSpace,
+      .imageExtent = extent,
+      .imageArrayLayers = 1,
+      .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+      .queueFamilyIndexCount = 1,
+      .pQueueFamilyIndices = &graphicsQueueFamily,
+      .preTransform = surfaceTransform,
+      .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+      .presentMode = presentMode,
+      .clipped = VK_TRUE,
+      .oldSwapchain = nullptr,
+  };
+  vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain);
+
+  uint32_t swapchainImageCount;
+  vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, nullptr);
+  std::vector<VkImage> swapchainImages(swapchainImageCount);
+  vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
+
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
   }
 
+  vkDestroySwapchainKHR(device, swapchain, nullptr);
+  vkDestroySurfaceKHR(instance, surface, nullptr);
   vkDestroyDevice(device, nullptr);
   vkDestroyInstance(instance, nullptr);
   glfwDestroyWindow(window);
