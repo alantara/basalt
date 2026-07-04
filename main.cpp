@@ -140,10 +140,38 @@ int main() {
   std::vector<VkImage> swapchainImages(swapchainImageCount);
   vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
 
+  std::vector<VkImageView> imageViews(swapchainImageCount);
+  for (uint32_t i = 0; i < swapchainImageCount; i++) {
+    VkComponentMapping componentMapping{
+        .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+    };
+    VkImageSubresourceRange imageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+    VkImageViewCreateInfo imageViewCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = swapchainImages[i],
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = surfaceFormat,
+        .components = componentMapping,
+        .subresourceRange = imageSubresourceRange};
+    vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageViews[i]);
+  }
+
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
   }
 
+  for (auto imageView : imageViews) {
+    vkDestroyImageView(device, imageView, nullptr);
+  }
   vkDestroySwapchainKHR(device, swapchain, nullptr);
   vkDestroySurfaceKHR(instance, surface, nullptr);
   vkDestroyDevice(device, nullptr);
