@@ -3,9 +3,40 @@
 #include <vector>
 #include <math.h>
 #include <algorithm>
+#include <fstream>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+
+struct vertex {
+  glm::vec3 pos, color;
+  static std::vector<VkVertexInputBindingDescription> GetBindingDescriptions() {
+    std::vector<VkVertexInputBindingDescription> bindingDescriptions;
+    bindingDescriptions.push_back(VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = sizeof(vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    });
+    return bindingDescriptions;
+  }
+  static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions() {
+    std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
+    attributeDescriptions.push_back(VkVertexInputAttributeDescription{
+        .location = 0,
+        .binding = 0,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = 0,
+    });
+    attributeDescriptions.push_back(VkVertexInputAttributeDescription{
+        .location = 1,
+        .binding = 0,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = sizeof(pos),
+    });
+    return attributeDescriptions;
+  }
+};
 
 int main() {
   glfwInit();
@@ -165,10 +196,109 @@ int main() {
     vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageViews[i]);
   }
 
+  VkPipeline pipeline;
+  std::ifstream shaderFile("../shaders/shader.spv", std::ios::ate | std::ios::binary);
+  std::vector<char> shaderCode(shaderFile.tellg());
+  shaderFile.seekg(0, std::ios::beg);
+  shaderFile.read(shaderCode.data(), static_cast<std::streamsize>(shaderCode.size()));
+  shaderFile.close();
+  VkShaderModule shader;
+  VkShaderModuleCreateInfo shaderModuleCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = static_cast<uint32_t>(shaderCode.size()) * sizeof(char),
+      .pCode = reinterpret_cast<const uint32_t*>(shaderCode.data()),
+  };
+  vkCreateShaderModule(device, &shaderModuleCreateInfo, nullptr, &shader);
+  std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
+  shaderStages.push_back(VkPipelineShaderStageCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage = VK_SHADER_STAGE_VERTEX_BIT,
+      .module = shader,
+      .pName = "vertMain",
+  });
+  shaderStages.push_back(VkPipelineShaderStageCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+      .module = shader,
+      .pName = "fragMain",
+  });
+  std::vector<VkVertexInputAttributeDescription> vertexAttributeDescriptions = vertex::GetAttributeDescriptions();
+  std::vector<VkVertexInputBindingDescription> vertexBindingDescriptions = vertex::GetBindingDescriptions();
+  VkPipelineVertexInputStateCreateInfo vertexInputState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+      .vertexBindingDescriptionCount = static_cast<uint32_t>(vertexBindingDescriptions.size()),
+      .pVertexBindingDescriptions = vertexBindingDescriptions.data(),
+      .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributeDescriptions.size()),
+      .pVertexAttributeDescriptions = vertexAttributeDescriptions.data(),
+  };
+  VkPipelineInputAssemblyStateCreateInfo inputAssemblyState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+  };
+  VkViewport viewport{
+      .x = 0,
+      .y = 0,
+      .width = static_cast<float>(extent.width),
+      .height = static_cast<float>(extent.height),
+  };
+  VkRect2D scissor{
+      .offset = VkOffset2D{.x = 0, .y = 0},
+      .extent = extent,
+  };
+  VkPipelineViewportStateCreateInfo viewportState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+      .viewportCount = 1,
+      .pViewports = &viewport,
+      .scissorCount = 1,
+      .pScissors = &scissor,
+  };
+  VkPipelineRasterizationStateCreateInfo rasterizationState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+      .depthClampEnable = VK_FALSE,
+      .rasterizerDiscardEnable = VK_FALSE,
+      .polygonMode = VK_POLYGON_MODE_FILL,
+      .cullMode = VK_CULL_MODE_FRONT_AND_BACK,
+      .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+      .depthBiasEnable = VK_FALSE,
+      .lineWidth = 1.0f,
+  };
+  VkPipelineMultisampleStateCreateInfo multisampleState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+      .sampleShadingEnable = VK_FALSE,
+  };
+  VkPipelineColorBlendStateCreateInfo colorBlendState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+      .logicOpEnable = VK_FALSE,
+  };
+  VkPipelineLayout pipelineLayout;
+  VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+      .setLayoutCount = 0,
+      .pushConstantRangeCount = 0,
+  };
+  vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
+  VkGraphicsPipelineCreateInfo pipelineCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .stageCount = static_cast<uint32_t>(shaderStages.size()),
+      .pStages = shaderStages.data(),
+      .pVertexInputState = &vertexInputState,
+      .pInputAssemblyState = &inputAssemblyState,
+      .pViewportState = &viewportState,
+      .pRasterizationState = &rasterizationState,
+      .pMultisampleState = &multisampleState,
+      .pColorBlendState = &colorBlendState,
+      .layout = pipelineLayout,
+  };
+  vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCreateInfo, nullptr, &pipeline);
+
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
   }
 
+  vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+  vkDestroyShaderModule(device, shader, nullptr);
+  vkDestroyPipeline(device, pipeline, nullptr);
   for (auto imageView : imageViews) {
     vkDestroyImageView(device, imageView, nullptr);
   }

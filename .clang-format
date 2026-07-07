@@ -2,3 +2,4 @@ ColumnLimit: 0
 SortIncludes: false
 AllowShortBlocksOnASingleLine: false
 PointerAlignment: Left
+KeepEmptyLinesAtTheStartOfBlocks: false
