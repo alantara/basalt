@@ -74,6 +74,9 @@ int main() {
   vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data());
   VkPhysicalDevice physicalDevice = physicalDevices[0];
 
+  VkPhysicalDeviceMemoryProperties memoryProperties;
+  vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
   uint32_t deviceQueueFamilyCount;
   vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &deviceQueueFamilyCount, nullptr);
   std::vector<VkQueueFamilyProperties> deviceQueueFamilies(deviceQueueFamilyCount);
@@ -193,6 +196,79 @@ int main() {
     vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageViews[i]);
   }
 
+  std::vector<VkFormat> depthFormatCandidates = {
+      VK_FORMAT_D32_SFLOAT,
+      VK_FORMAT_D32_SFLOAT_S8_UINT,
+      VK_FORMAT_D24_UNORM_S8_UINT,
+  };
+  VkFormat depthFormat;
+  for (VkFormat candidate : depthFormatCandidates) {
+    VkFormatProperties depthFormatProperties;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, candidate, &depthFormatProperties);
+    if (depthFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+      depthFormat = candidate;
+      break;
+    }
+  }
+  VkImageAspectFlags depthImageAspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+  if (depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT || depthFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
+    depthImageAspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+  }
+
+  VkImage depthImage;
+  VkImageCreateInfo depthImageCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D,
+      .format = depthFormat,
+      .extent = VkExtent3D{.width = extent.width, .height = extent.height, .depth = 1},
+      .mipLevels = 1,
+      .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .tiling = VK_IMAGE_TILING_OPTIMAL,
+      .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+  };
+  vkCreateImage(device, &depthImageCreateInfo, nullptr, &depthImage);
+
+  VkMemoryRequirements depthImageMemoryRequirements;
+  vkGetImageMemoryRequirements(device, depthImage, &depthImageMemoryRequirements);
+
+  VkMemoryPropertyFlags deviceLocalMemoryFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+  uint32_t depthImageMemoryTypeIndex;
+  for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+    if ((depthImageMemoryRequirements.memoryTypeBits & (1 << i)) &&
+        (memoryProperties.memoryTypes[i].propertyFlags & deviceLocalMemoryFlags) == deviceLocalMemoryFlags) {
+      depthImageMemoryTypeIndex = i;
+      break;
+    }
+  }
+
+  VkDeviceMemory depthImageMemory;
+  VkMemoryAllocateInfo depthImageMemoryAllocateInfo{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = depthImageMemoryRequirements.size,
+      .memoryTypeIndex = depthImageMemoryTypeIndex,
+  };
+  vkAllocateMemory(device, &depthImageMemoryAllocateInfo, nullptr, &depthImageMemory);
+  vkBindImageMemory(device, depthImage, depthImageMemory, 0);
+
+  VkImageView depthImageView;
+  VkImageViewCreateInfo depthImageViewCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image = depthImage,
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format = depthFormat,
+      .subresourceRange = VkImageSubresourceRange{
+          .aspectMask = depthImageAspectMask,
+          .baseMipLevel = 0,
+          .levelCount = 1,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+      },
+  };
+  vkCreateImageView(device, &depthImageViewCreateInfo, nullptr, &depthImageView);
+
   VkPipeline pipeline;
   std::ifstream shaderFile("../shaders/shader.spv", std::ios::ate | std::ios::binary);
   std::vector<char> shaderCode(shaderFile.tellg());
@@ -276,6 +352,14 @@ int main() {
       .attachmentCount = 1,
       .pAttachments = &colorBlendAttachmentState,
   };
+  VkPipelineDepthStencilStateCreateInfo depthStencilState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+      .depthTestEnable = VK_TRUE,
+      .depthWriteEnable = VK_TRUE,
+      .depthCompareOp = VK_COMPARE_OP_LESS,
+      .depthBoundsTestEnable = VK_FALSE,
+      .stencilTestEnable = VK_FALSE,
+  };
   VkPipelineLayout pipelineLayout;
   VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{
       .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -287,6 +371,7 @@ int main() {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
       .colorAttachmentCount = 1,
       .pColorAttachmentFormats = &surfaceFormat,
+      .depthAttachmentFormat = depthFormat,
   };
   VkGraphicsPipelineCreateInfo pipelineCreateInfo{
       .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -298,6 +383,7 @@ int main() {
       .pViewportState = &viewportState,
       .pRasterizationState = &rasterizationState,
       .pMultisampleState = &multisampleState,
+      .pDepthStencilState = &depthStencilState,
       .pColorBlendState = &colorBlendState,
       .layout = pipelineLayout,
   };
@@ -320,10 +406,14 @@ int main() {
   vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer);
 
   std::vector<vertex> triangleVertices = {
-      {.pos = {-0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 0.0f}},
+      {.pos = {-0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
       {.pos = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
-      {.pos = {-0.5f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
-      {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 1.0f}},
+      {.pos = {-0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+      {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+      {.pos = {-0.6f, -0.6f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {0.4f, -0.6f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {-0.6f, 0.4f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {0.4f, 0.4f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
   };
   VkDeviceSize vertexBufferSize = sizeof(vertex) * triangleVertices.size();
 
@@ -339,8 +429,6 @@ int main() {
   VkMemoryRequirements vertexBufferMemoryRequirements;
   vkGetBufferMemoryRequirements(device, vertexBuffer, &vertexBufferMemoryRequirements);
 
-  VkPhysicalDeviceMemoryProperties memoryProperties;
-  vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
   VkMemoryPropertyFlags hostVisibleMemoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   uint32_t vertexBufferMemoryTypeIndex;
   for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
@@ -365,7 +453,7 @@ int main() {
   memcpy(vertexData, triangleVertices.data(), static_cast<size_t>(vertexBufferSize));
   vkUnmapMemory(device, vertexBufferMemory);
 
-  std::vector<uint32_t> triangleIndices = {0, 1, 2, 1, 2, 3};
+  std::vector<uint32_t> triangleIndices = {0, 1, 2, 5, 6, 7, 4, 5, 6, 1, 2, 3};
   VkDeviceSize indexBufferSize = sizeof(uint32_t) * triangleIndices.size();
 
   VkBuffer indexBuffer;
@@ -437,8 +525,15 @@ int main() {
     };
     vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo);
 
-    VkImageSubresourceRange imageSubresourceRange{
+    VkImageSubresourceRange colorSubresourceRange{
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+    VkImageSubresourceRange depthSubresourceRange{
+        .aspectMask = depthImageAspectMask,
         .baseMipLevel = 0,
         .levelCount = 1,
         .baseArrayLayer = 0,
@@ -456,12 +551,26 @@ int main() {
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image = swapchainImages[imageIndex],
-        .subresourceRange = imageSubresourceRange,
+        .subresourceRange = colorSubresourceRange,
     };
+    VkImageMemoryBarrier2 toDepthAttachmentBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+        .srcAccessMask = VK_ACCESS_2_NONE,
+        .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        .dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = depthImage,
+        .subresourceRange = depthSubresourceRange,
+    };
+    VkImageMemoryBarrier2 toAttachmentBarriers[] = {toColorAttachmentBarrier, toDepthAttachmentBarrier};
     VkDependencyInfo toColorAttachmentDependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &toColorAttachmentBarrier,
+        .imageMemoryBarrierCount = 2,
+        .pImageMemoryBarriers = toAttachmentBarriers,
     };
     vkCmdPipelineBarrier2(commandBuffer, &toColorAttachmentDependency);
 
@@ -480,12 +589,24 @@ int main() {
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = clearValue,
     };
+    VkClearValue depthClearValue{
+        .depthStencil = VkClearDepthStencilValue{.depth = 1.0f, .stencil = 0},
+    };
+    VkRenderingAttachmentInfo depthAttachment{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = depthImageView,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .clearValue = depthClearValue,
+    };
     VkRenderingInfo renderingInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .renderArea = renderArea,
         .layerCount = 1,
         .colorAttachmentCount = 1,
         .pColorAttachments = &colorAttachment,
+        .pDepthAttachment = &depthAttachment,
     };
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
@@ -508,7 +629,7 @@ int main() {
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image = swapchainImages[imageIndex],
-        .subresourceRange = imageSubresourceRange,
+        .subresourceRange = colorSubresourceRange,
     };
     VkDependencyInfo toPresentDependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -573,6 +694,9 @@ int main() {
   for (auto imageView : imageViews) {
     vkDestroyImageView(device, imageView, nullptr);
   }
+  vkDestroyImageView(device, depthImageView, nullptr);
+  vkDestroyImage(device, depthImage, nullptr);
+  vkFreeMemory(device, depthImageMemory, nullptr);
   vkDestroySwapchainKHR(device, swapchain, nullptr);
   vkDestroySurfaceKHR(instance, surface, nullptr);
   vkDestroyDevice(device, nullptr);
