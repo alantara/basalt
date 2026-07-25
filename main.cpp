@@ -8,6 +8,7 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <vulkan/vulkan_core.h>
 
 struct vertex {
   glm::vec3 pos, color;
@@ -308,32 +309,16 @@ int main() {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
       .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
   };
-  VkViewport viewport{
-      .x = 0,
-      .y = 0,
-      .width = static_cast<float>(extent.width),
-      .height = static_cast<float>(extent.height),
-      .minDepth = 0.0f,
-      .maxDepth = 1.0f,
-  };
-  VkRect2D scissor{
-      .offset = VkOffset2D{.x = 0, .y = 0},
-      .extent = extent,
-  };
   VkPipelineViewportStateCreateInfo viewportState{
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-      .viewportCount = 1,
-      .pViewports = &viewport,
-      .scissorCount = 1,
-      .pScissors = &scissor,
+      .viewportCount = 0,
+      .scissorCount = 0,
   };
   VkPipelineRasterizationStateCreateInfo rasterizationState{
       .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
       .depthClampEnable = VK_FALSE,
       .rasterizerDiscardEnable = VK_FALSE,
       .polygonMode = VK_POLYGON_MODE_FILL,
-      .cullMode = VK_CULL_MODE_NONE,
-      .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
       .depthBiasEnable = VK_FALSE,
       .lineWidth = 1.0f,
   };
@@ -354,11 +339,23 @@ int main() {
   };
   VkPipelineDepthStencilStateCreateInfo depthStencilState{
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-      .depthTestEnable = VK_TRUE,
-      .depthWriteEnable = VK_TRUE,
-      .depthCompareOp = VK_COMPARE_OP_LESS,
       .depthBoundsTestEnable = VK_FALSE,
       .stencilTestEnable = VK_FALSE,
+  };
+  std::vector<VkDynamicState> dynamicStates = {
+      VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
+      VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
+      VK_DYNAMIC_STATE_CULL_MODE,
+      VK_DYNAMIC_STATE_FRONT_FACE,
+      VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
+      VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+      VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+      VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+  };
+  VkPipelineDynamicStateCreateInfo dynamicState{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+      .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+      .pDynamicStates = dynamicStates.data(),
   };
   VkPipelineLayout pipelineLayout;
   VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{
@@ -385,6 +382,7 @@ int main() {
       .pMultisampleState = &multisampleState,
       .pDepthStencilState = &depthStencilState,
       .pColorBlendState = &colorBlendState,
+      .pDynamicState = &dynamicState,
       .layout = pipelineLayout,
   };
   vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCreateInfo, nullptr, &pipeline);
@@ -611,6 +609,28 @@ int main() {
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+    VkViewport viewport{
+        .x = 0,
+        .y = 0,
+        .width = static_cast<float>(extent.width),
+        .height = static_cast<float>(extent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+    vkCmdSetViewportWithCount(commandBuffer, 1, &viewport);
+    VkRect2D scissor{
+        .offset = VkOffset2D{.x = 0, .y = 0},
+        .extent = extent,
+    };
+    vkCmdSetScissorWithCount(commandBuffer, 1, &scissor);
+    vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_BACK_BIT);
+    vkCmdSetFrontFace(commandBuffer, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    vkCmdSetPrimitiveTopology(commandBuffer, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    vkCmdSetDepthTestEnable(commandBuffer, VK_TRUE);
+    vkCmdSetDepthWriteEnable(commandBuffer, VK_TRUE);
+    vkCmdSetDepthCompareOp(commandBuffer, VK_COMPARE_OP_LESS);
+
     VkDeviceSize vertexBufferOffset = 0;
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexBufferOffset);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
