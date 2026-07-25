@@ -320,9 +320,10 @@ int main() {
   vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer);
 
   std::vector<vertex> triangleVertices = {
-      {.pos = {0.0f, -0.5f, 0.0f}, .color = {1.0f, 0.0f, 0.0f}},
-      {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
-      {.pos = {-0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+      {.pos = {-0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 0.0f}},
+      {.pos = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+      {.pos = {-0.5f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 1.0f}},
   };
   VkDeviceSize vertexBufferSize = sizeof(vertex) * triangleVertices.size();
 
@@ -340,11 +341,11 @@ int main() {
 
   VkPhysicalDeviceMemoryProperties memoryProperties;
   vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
-  VkMemoryPropertyFlags vertexBufferMemoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  VkMemoryPropertyFlags hostVisibleMemoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   uint32_t vertexBufferMemoryTypeIndex;
   for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
     if ((vertexBufferMemoryRequirements.memoryTypeBits & (1 << i)) &&
-        (memoryProperties.memoryTypes[i].propertyFlags & vertexBufferMemoryFlags) == vertexBufferMemoryFlags) {
+        (memoryProperties.memoryTypes[i].propertyFlags & hostVisibleMemoryFlags) == hostVisibleMemoryFlags) {
       vertexBufferMemoryTypeIndex = i;
       break;
     }
@@ -363,6 +364,44 @@ int main() {
   vkMapMemory(device, vertexBufferMemory, 0, vertexBufferSize, 0, &vertexData);
   memcpy(vertexData, triangleVertices.data(), static_cast<size_t>(vertexBufferSize));
   vkUnmapMemory(device, vertexBufferMemory);
+
+  std::vector<uint32_t> triangleIndices = {0, 1, 2, 1, 2, 3};
+  VkDeviceSize indexBufferSize = sizeof(uint32_t) * triangleIndices.size();
+
+  VkBuffer indexBuffer;
+  VkBufferCreateInfo indexBufferCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = indexBufferSize,
+      .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+  };
+  vkCreateBuffer(device, &indexBufferCreateInfo, nullptr, &indexBuffer);
+
+  VkMemoryRequirements indexBufferMemoryRequirements;
+  vkGetBufferMemoryRequirements(device, indexBuffer, &indexBufferMemoryRequirements);
+
+  uint32_t indexBufferMemoryTypeIndex;
+  for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+    if ((indexBufferMemoryRequirements.memoryTypeBits & (1 << i)) &&
+        (memoryProperties.memoryTypes[i].propertyFlags & hostVisibleMemoryFlags) == hostVisibleMemoryFlags) {
+      indexBufferMemoryTypeIndex = i;
+      break;
+    }
+  }
+
+  VkDeviceMemory indexBufferMemory;
+  VkMemoryAllocateInfo indexBufferMemoryAllocateInfo{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = indexBufferMemoryRequirements.size,
+      .memoryTypeIndex = indexBufferMemoryTypeIndex,
+  };
+  vkAllocateMemory(device, &indexBufferMemoryAllocateInfo, nullptr, &indexBufferMemory);
+  vkBindBufferMemory(device, indexBuffer, indexBufferMemory, 0);
+
+  void* indexData;
+  vkMapMemory(device, indexBufferMemory, 0, indexBufferSize, 0, &indexData);
+  memcpy(indexData, triangleIndices.data(), static_cast<size_t>(indexBufferSize));
+  vkUnmapMemory(device, indexBufferMemory);
 
   VkSemaphoreCreateInfo semaphoreCreateInfo{
       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -453,7 +492,8 @@ int main() {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     VkDeviceSize vertexBufferOffset = 0;
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexBufferOffset);
-    vkCmdDraw(commandBuffer, static_cast<uint32_t>(triangleVertices.size()), 1, 0, 0);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(triangleIndices.size()), 1, 0, 0, 0);
 
     vkCmdEndRendering(commandBuffer);
 
@@ -522,6 +562,8 @@ int main() {
     vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
   }
   vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+  vkDestroyBuffer(device, indexBuffer, nullptr);
+  vkFreeMemory(device, indexBufferMemory, nullptr);
   vkDestroyBuffer(device, vertexBuffer, nullptr);
   vkFreeMemory(device, vertexBufferMemory, nullptr);
   vkDestroyCommandPool(device, commandPool, nullptr);
