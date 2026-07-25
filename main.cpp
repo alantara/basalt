@@ -4,6 +4,7 @@
 #include <math.h>
 #include <algorithm>
 #include <fstream>
+#include <cstring>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 #include <GLFW/glfw3.h>
@@ -140,8 +141,8 @@ int main() {
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
     extent = VkExtent2D{
-        .width = std::clamp<uint32_t>(width, surfaceCapabilities.surfaceCapabilities.minImageExtent.width, surfaceCapabilities.surfaceCapabilities.minImageExtent.width),
-        .height = std::clamp<uint32_t>(height, surfaceCapabilities.surfaceCapabilities.minImageExtent.height, surfaceCapabilities.surfaceCapabilities.minImageExtent.height),
+        .width = std::clamp<uint32_t>(width, surfaceCapabilities.surfaceCapabilities.minImageExtent.width, surfaceCapabilities.surfaceCapabilities.maxImageExtent.width),
+        .height = std::clamp<uint32_t>(height, surfaceCapabilities.surfaceCapabilities.minImageExtent.height, surfaceCapabilities.surfaceCapabilities.maxImageExtent.height),
     };
   }
   VkSurfaceTransformFlagBitsKHR surfaceTransform = surfaceCapabilities.surfaceCapabilities.currentTransform;
@@ -257,7 +258,7 @@ int main() {
       .depthClampEnable = VK_FALSE,
       .rasterizerDiscardEnable = VK_FALSE,
       .polygonMode = VK_POLYGON_MODE_FILL,
-      .cullMode = VK_CULL_MODE_FRONT_AND_BACK,
+      .cullMode = VK_CULL_MODE_NONE,
       .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
       .depthBiasEnable = VK_FALSE,
       .lineWidth = 1.0f,
@@ -267,9 +268,15 @@ int main() {
       .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
       .sampleShadingEnable = VK_FALSE,
   };
+  VkPipelineColorBlendAttachmentState colorBlendAttachmentState{
+      .blendEnable = VK_FALSE,
+      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+  };
   VkPipelineColorBlendStateCreateInfo colorBlendState{
       .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
       .logicOpEnable = VK_FALSE,
+      .attachmentCount = 1,
+      .pAttachments = &colorBlendAttachmentState,
   };
   VkPipelineLayout pipelineLayout;
   VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{
@@ -278,8 +285,14 @@ int main() {
       .pushConstantRangeCount = 0,
   };
   vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
+  VkPipelineRenderingCreateInfo pipelineRenderingCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+      .colorAttachmentCount = 1,
+      .pColorAttachmentFormats = &surfaceFormat,
+  };
   VkGraphicsPipelineCreateInfo pipelineCreateInfo{
       .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .pNext = &pipelineRenderingCreateInfo,
       .stageCount = static_cast<uint32_t>(shaderStages.size()),
       .pStages = shaderStages.data(),
       .pVertexInputState = &vertexInputState,
@@ -292,10 +305,231 @@ int main() {
   };
   vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCreateInfo, nullptr, &pipeline);
 
-  while (!glfwWindowShouldClose(window)) {
-    glfwPollEvents();
+  VkCommandPool commandPool;
+  VkCommandPoolCreateInfo commandPoolCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+      .queueFamilyIndex = graphicsQueueFamily,
+  };
+  vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandPool);
+
+  VkCommandBuffer commandBuffer;
+  VkCommandBufferAllocateInfo commandBufferAllocateInfo{
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = commandPool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+  };
+  vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer);
+
+  std::vector<vertex> triangleVertices = {
+      {.pos = {0.0f, -0.5f, 0.0f}, .color = {1.0f, 0.0f, 0.0f}},
+      {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {-0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+  };
+  VkDeviceSize vertexBufferSize = sizeof(vertex) * triangleVertices.size();
+
+  VkBuffer vertexBuffer;
+  VkBufferCreateInfo vertexBufferCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = vertexBufferSize,
+      .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+  };
+  vkCreateBuffer(device, &vertexBufferCreateInfo, nullptr, &vertexBuffer);
+
+  VkBufferMemoryRequirementsInfo2 vertexBufferMemoryRequirementsInfo{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
+      .buffer = vertexBuffer,
+  };
+  VkMemoryRequirements2 vertexBufferMemoryRequirements{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+  vkGetBufferMemoryRequirements2(device, &vertexBufferMemoryRequirementsInfo, &vertexBufferMemoryRequirements);
+
+  VkPhysicalDeviceMemoryProperties2 memoryProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+  vkGetPhysicalDeviceMemoryProperties2(physicalDevice, &memoryProperties);
+  VkMemoryPropertyFlags vertexBufferMemoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  uint32_t vertexBufferMemoryTypeIndex;
+  for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; i++) {
+    if ((vertexBufferMemoryRequirements.memoryRequirements.memoryTypeBits & (1 << i)) &&
+        (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & vertexBufferMemoryFlags) == vertexBufferMemoryFlags) {
+      vertexBufferMemoryTypeIndex = i;
+      break;
+    }
   }
 
+  VkDeviceMemory vertexBufferMemory;
+  VkMemoryAllocateInfo vertexBufferMemoryAllocateInfo{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = vertexBufferMemoryRequirements.memoryRequirements.size,
+      .memoryTypeIndex = vertexBufferMemoryTypeIndex,
+  };
+  vkAllocateMemory(device, &vertexBufferMemoryAllocateInfo, nullptr, &vertexBufferMemory);
+  vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+  void* vertexData;
+  vkMapMemory(device, vertexBufferMemory, 0, vertexBufferSize, 0, &vertexData);
+  memcpy(vertexData, triangleVertices.data(), static_cast<size_t>(vertexBufferSize));
+  vkUnmapMemory(device, vertexBufferMemory);
+
+  VkSemaphoreCreateInfo semaphoreCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+  };
+  VkSemaphore imageAvailableSemaphore;
+  vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphore);
+  std::vector<VkSemaphore> renderFinishedSemaphores(swapchainImageCount);
+  for (uint32_t i = 0; i < swapchainImageCount; i++) {
+    vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphores[i]);
+  }
+
+  VkFenceCreateInfo fenceCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+      .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+  };
+  VkFence inFlightFence;
+  vkCreateFence(device, &fenceCreateInfo, nullptr, &inFlightFence);
+
+  while (!glfwWindowShouldClose(window)) {
+    glfwPollEvents();
+
+    vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+    vkResetFences(device, 1, &inFlightFence);
+
+    uint32_t imageIndex;
+    vkAcquireNextImageKHR(device, swapchain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+    vkResetCommandPool(device, commandPool, 0);
+
+    VkCommandBufferBeginInfo commandBufferBeginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+    };
+    vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo);
+
+    VkImageSubresourceRange imageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    VkImageMemoryBarrier2 toColorAttachmentBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+        .srcAccessMask = VK_ACCESS_2_NONE,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = swapchainImages[imageIndex],
+        .subresourceRange = imageSubresourceRange,
+    };
+    VkDependencyInfo toColorAttachmentDependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toColorAttachmentBarrier,
+    };
+    vkCmdPipelineBarrier2(commandBuffer, &toColorAttachmentDependency);
+
+    VkRect2D renderArea{
+        .offset = VkOffset2D{.x = 0, .y = 0},
+        .extent = extent,
+    };
+    VkClearValue clearValue{
+        .color = VkClearColorValue{{1.0, 1.0, 1.0, 1.0}},
+    };
+    VkRenderingAttachmentInfo colorAttachment{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = imageViews[imageIndex],
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = clearValue,
+    };
+    VkRenderingInfo renderingInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = renderArea,
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachment,
+    };
+    vkCmdBeginRendering(commandBuffer, &renderingInfo);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    VkDeviceSize vertexBufferOffset = 0;
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexBufferOffset);
+    vkCmdDraw(commandBuffer, static_cast<uint32_t>(triangleVertices.size()), 1, 0, 0);
+
+    vkCmdEndRendering(commandBuffer);
+
+    VkImageMemoryBarrier2 toPresentBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+        .dstAccessMask = VK_ACCESS_2_NONE,
+        .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = swapchainImages[imageIndex],
+        .subresourceRange = imageSubresourceRange,
+    };
+    VkDependencyInfo toPresentDependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toPresentBarrier,
+    };
+    vkCmdPipelineBarrier2(commandBuffer, &toPresentDependency);
+
+    vkEndCommandBuffer(commandBuffer);
+
+    VkSemaphoreSubmitInfo waitSemaphoreInfo{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .semaphore = imageAvailableSemaphore,
+        .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+    };
+    VkCommandBufferSubmitInfo commandBufferSubmitInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+        .commandBuffer = commandBuffer,
+    };
+    VkSemaphoreSubmitInfo signalSemaphoreInfo{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .semaphore = renderFinishedSemaphores[imageIndex],
+        .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+    };
+    VkSubmitInfo2 submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .waitSemaphoreInfoCount = 1,
+        .pWaitSemaphoreInfos = &waitSemaphoreInfo,
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = &commandBufferSubmitInfo,
+        .signalSemaphoreInfoCount = 1,
+        .pSignalSemaphoreInfos = &signalSemaphoreInfo,
+    };
+    vkQueueSubmit2(graphicsQueue, 1, &submitInfo, inFlightFence);
+
+    VkPresentInfoKHR presentInfo{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &renderFinishedSemaphores[imageIndex],
+        .swapchainCount = 1,
+        .pSwapchains = &swapchain,
+        .pImageIndices = &imageIndex,
+    };
+    vkQueuePresentKHR(graphicsQueue, &presentInfo);
+  }
+
+  vkDeviceWaitIdle(device);
+
+  vkDestroyFence(device, inFlightFence, nullptr);
+  for (auto renderFinishedSemaphore : renderFinishedSemaphores) {
+    vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+  }
+  vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+  vkDestroyBuffer(device, vertexBuffer, nullptr);
+  vkFreeMemory(device, vertexBufferMemory, nullptr);
+  vkDestroyCommandPool(device, commandPool, nullptr);
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyShaderModule(device, shader, nullptr);
   vkDestroyPipeline(device, pipeline, nullptr);
