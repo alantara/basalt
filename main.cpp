@@ -1,12 +1,11 @@
 #include <iostream>
 #include <limits>
 #include <vector>
-#include <math.h>
 #include <algorithm>
 #include <fstream>
 #include <cstring>
+#include <cstddef>
 #include <vulkan/vulkan.h>
-#include <vulkan/vulkan_core.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
@@ -33,7 +32,7 @@ struct vertex {
         .location = 1,
         .binding = 0,
         .format = VK_FORMAT_R32G32B32_SFLOAT,
-        .offset = sizeof(pos),
+        .offset = offsetof(vertex, color),
     });
     return attributeDescriptions;
   }
@@ -51,7 +50,6 @@ int main() {
   uint32_t glfwExtensionCount;
   const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
   instanceExtensions.insert(instanceExtensions.end(), glfwExtensions, glfwExtensions + glfwExtensionCount);
-  instanceExtensions.push_back("VK_KHR_get_surface_capabilities2");
   VkApplicationInfo applicationInfo{
       .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
       .pApplicationName = "Application Test",
@@ -77,14 +75,15 @@ int main() {
   VkPhysicalDevice physicalDevice = physicalDevices[0];
 
   uint32_t deviceQueueFamilyCount;
-  vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &deviceQueueFamilyCount, nullptr);
-  std::vector<VkQueueFamilyProperties2> deviceQueueFamilies(deviceQueueFamilyCount, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
-  vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &deviceQueueFamilyCount, deviceQueueFamilies.data());
+  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &deviceQueueFamilyCount, nullptr);
+  std::vector<VkQueueFamilyProperties> deviceQueueFamilies(deviceQueueFamilyCount);
+  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &deviceQueueFamilyCount, deviceQueueFamilies.data());
 
-  uint32_t graphicsQueueFamily;
+  uint32_t graphicsQueueFamily = UINT32_MAX;
   for (uint32_t i = 0; i < deviceQueueFamilyCount; i++) {
-    if (deviceQueueFamilies[i].queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+    if (deviceQueueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
       graphicsQueueFamily = i;
+      break;
     }
   }
 
@@ -109,7 +108,7 @@ int main() {
       .dynamicRendering = VK_TRUE,
   };
   std::vector<const char*> deviceExtension;
-  deviceExtension.push_back("VK_KHR_swapchain");
+  deviceExtension.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
   std::vector<VkDeviceQueueCreateInfo> deviceQueues;
   deviceQueues.push_back(graphicsQueueCreateInfo);
   VkDeviceCreateInfo deviceCreateInfo{
@@ -127,25 +126,24 @@ int main() {
   std::cout << glfwCreateWindowSurface(instance, window, nullptr, &surface);
 
   VkSwapchainKHR swapchain;
-  VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo{
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
-      .surface = surface,
-  };
-  VkSurfaceCapabilities2KHR surfaceCapabilities{VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
-  vkGetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice, &surfaceInfo, &surfaceCapabilities);
-  uint32_t minImageCount = surfaceCapabilities.surfaceCapabilities.minImageCount + 1;
+  VkSurfaceCapabilitiesKHR surfaceCapabilities;
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCapabilities);
+  uint32_t minImageCount = surfaceCapabilities.minImageCount + 1;
+  if (surfaceCapabilities.maxImageCount > 0) {
+    minImageCount = std::min(minImageCount, surfaceCapabilities.maxImageCount);
+  }
   VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_SRGB;
   VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-  VkExtent2D extent = surfaceCapabilities.surfaceCapabilities.currentExtent;
+  VkExtent2D extent = surfaceCapabilities.currentExtent;
   if (extent.width == std::numeric_limits<uint32_t>::max()) {
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
     extent = VkExtent2D{
-        .width = std::clamp<uint32_t>(width, surfaceCapabilities.surfaceCapabilities.minImageExtent.width, surfaceCapabilities.surfaceCapabilities.maxImageExtent.width),
-        .height = std::clamp<uint32_t>(height, surfaceCapabilities.surfaceCapabilities.minImageExtent.height, surfaceCapabilities.surfaceCapabilities.maxImageExtent.height),
+        .width = std::clamp<uint32_t>(width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width),
+        .height = std::clamp<uint32_t>(height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height),
     };
   }
-  VkSurfaceTransformFlagBitsKHR surfaceTransform = surfaceCapabilities.surfaceCapabilities.currentTransform;
+  VkSurfaceTransformFlagBitsKHR surfaceTransform = surfaceCapabilities.currentTransform;
   VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
   VkSwapchainCreateInfoKHR swapchainCreateInfo{
       .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -157,8 +155,6 @@ int main() {
       .imageArrayLayers = 1,
       .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
       .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-      .queueFamilyIndexCount = 1,
-      .pQueueFamilyIndices = &graphicsQueueFamily,
       .preTransform = surfaceTransform,
       .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
       .presentMode = presentMode,
@@ -206,7 +202,7 @@ int main() {
   VkShaderModule shader;
   VkShaderModuleCreateInfo shaderModuleCreateInfo{
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .codeSize = static_cast<uint32_t>(shaderCode.size()) * sizeof(char),
+      .codeSize = shaderCode.size(),
       .pCode = reinterpret_cast<const uint32_t*>(shaderCode.data()),
   };
   vkCreateShaderModule(device, &shaderModuleCreateInfo, nullptr, &shader);
@@ -241,6 +237,8 @@ int main() {
       .y = 0,
       .width = static_cast<float>(extent.width),
       .height = static_cast<float>(extent.height),
+      .minDepth = 0.0f,
+      .maxDepth = 1.0f,
   };
   VkRect2D scissor{
       .offset = VkOffset2D{.x = 0, .y = 0},
@@ -337,20 +335,16 @@ int main() {
   };
   vkCreateBuffer(device, &vertexBufferCreateInfo, nullptr, &vertexBuffer);
 
-  VkBufferMemoryRequirementsInfo2 vertexBufferMemoryRequirementsInfo{
-      .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
-      .buffer = vertexBuffer,
-  };
-  VkMemoryRequirements2 vertexBufferMemoryRequirements{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
-  vkGetBufferMemoryRequirements2(device, &vertexBufferMemoryRequirementsInfo, &vertexBufferMemoryRequirements);
+  VkMemoryRequirements vertexBufferMemoryRequirements;
+  vkGetBufferMemoryRequirements(device, vertexBuffer, &vertexBufferMemoryRequirements);
 
-  VkPhysicalDeviceMemoryProperties2 memoryProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
-  vkGetPhysicalDeviceMemoryProperties2(physicalDevice, &memoryProperties);
+  VkPhysicalDeviceMemoryProperties memoryProperties;
+  vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
   VkMemoryPropertyFlags vertexBufferMemoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   uint32_t vertexBufferMemoryTypeIndex;
-  for (uint32_t i = 0; i < memoryProperties.memoryProperties.memoryTypeCount; i++) {
-    if ((vertexBufferMemoryRequirements.memoryRequirements.memoryTypeBits & (1 << i)) &&
-        (memoryProperties.memoryProperties.memoryTypes[i].propertyFlags & vertexBufferMemoryFlags) == vertexBufferMemoryFlags) {
+  for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+    if ((vertexBufferMemoryRequirements.memoryTypeBits & (1 << i)) &&
+        (memoryProperties.memoryTypes[i].propertyFlags & vertexBufferMemoryFlags) == vertexBufferMemoryFlags) {
       vertexBufferMemoryTypeIndex = i;
       break;
     }
@@ -359,7 +353,7 @@ int main() {
   VkDeviceMemory vertexBufferMemory;
   VkMemoryAllocateInfo vertexBufferMemoryAllocateInfo{
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-      .allocationSize = vertexBufferMemoryRequirements.memoryRequirements.size,
+      .allocationSize = vertexBufferMemoryRequirements.size,
       .memoryTypeIndex = vertexBufferMemoryTypeIndex,
   };
   vkAllocateMemory(device, &vertexBufferMemoryAllocateInfo, nullptr, &vertexBufferMemory);
@@ -400,6 +394,7 @@ int main() {
 
     VkCommandBufferBeginInfo commandBufferBeginInfo{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
     vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo);
 
@@ -436,7 +431,7 @@ int main() {
         .extent = extent,
     };
     VkClearValue clearValue{
-        .color = VkClearColorValue{{1.0, 1.0, 1.0, 1.0}},
+        .color = VkClearColorValue{{1.0f, 1.0f, 1.0f, 1.0f}},
     };
     VkRenderingAttachmentInfo colorAttachment{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
