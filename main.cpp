@@ -5,10 +5,18 @@
 #include <fstream>
 #include <cstring>
 #include <cstddef>
+#include <chrono>
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <vulkan/vulkan_core.h>
+
+struct UniformBufferObject {
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 proj;
+};
 
 struct vertex {
   glm::vec3 pos, color;
@@ -127,7 +135,7 @@ int main() {
   vkGetDeviceQueue(device, graphicsQueueFamily, 0, &graphicsQueue);
 
   VkSurfaceKHR surface;
-  std::cout << glfwCreateWindowSurface(instance, window, nullptr, &surface);
+  glfwCreateWindowSurface(instance, window, nullptr, &surface);
 
   VkSwapchainKHR swapchain;
   VkSurfaceCapabilitiesKHR surfaceCapabilities;
@@ -357,10 +365,25 @@ int main() {
       .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
       .pDynamicStates = dynamicStates.data(),
   };
+  VkDescriptorSetLayoutBinding uniformBufferBinding{
+      .binding = 0,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .descriptorCount = 1,
+      .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+  };
+  VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .bindingCount = 1,
+      .pBindings = &uniformBufferBinding,
+  };
+  VkDescriptorSetLayout descriptorSetLayout;
+  vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
+
   VkPipelineLayout pipelineLayout;
   VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{
       .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-      .setLayoutCount = 0,
+      .setLayoutCount = 1,
+      .pSetLayouts = &descriptorSetLayout,
       .pushConstantRangeCount = 0,
   };
   vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
@@ -404,14 +427,14 @@ int main() {
   vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer);
 
   std::vector<vertex> triangleVertices = {
-      {.pos = {-0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
-      {.pos = {0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
-      {.pos = {-0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
-      {.pos = {0.5f, 0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
-      {.pos = {-0.6f, -0.6f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-      {.pos = {0.4f, -0.6f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-      {.pos = {-0.6f, 0.4f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
-      {.pos = {0.4f, 0.4f, 0.5f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {-1.0f, -1.0f, 1.0f}, .color = {0.0f, 0.0f, 0.0f}},
+      {.pos = {-1.0f, -1.0f, -1.0f}, .color = {1.0f, 0.0f, 0.0f}},
+      {.pos = {1.0f, -1.0f, 1.0f}, .color = {0.0f, 1.0f, 0.0f}},
+      {.pos = {1.0f, -1.0f, -1.0f}, .color = {1.0f, 1.0f, 0.0f}},
+      {.pos = {-1.0f, 1.0f, 1.0f}, .color = {0.0f, 0.0f, 1.0f}},
+      {.pos = {-1.0f, 1.0f, -1.0f}, .color = {1.0f, 0.0f, 1.0f}},
+      {.pos = {1.0f, 1.0f, 1.0f}, .color = {0.0f, 1.0f, 1.0f}},
+      {.pos = {1.0f, 1.0f, -1.0f}, .color = {1.0f, 1.0f, 1.0f}},
   };
   VkDeviceSize vertexBufferSize = sizeof(vertex) * triangleVertices.size();
 
@@ -451,7 +474,7 @@ int main() {
   memcpy(vertexData, triangleVertices.data(), static_cast<size_t>(vertexBufferSize));
   vkUnmapMemory(device, vertexBufferMemory);
 
-  std::vector<uint32_t> triangleIndices = {0, 1, 2, 5, 6, 7, 4, 5, 6, 1, 2, 3};
+  std::vector<uint32_t> triangleIndices = {0, 1, 2, 1, 2, 3, 0, 1, 4, 1, 4, 5, 0, 2, 4, 2, 4, 6, 2, 6, 7, 2, 3, 7, 1, 3, 5, 3, 5, 7, 4, 5, 6, 5, 6, 7};
   VkDeviceSize indexBufferSize = sizeof(uint32_t) * triangleIndices.size();
 
   VkBuffer indexBuffer;
@@ -489,6 +512,76 @@ int main() {
   memcpy(indexData, triangleIndices.data(), static_cast<size_t>(indexBufferSize));
   vkUnmapMemory(device, indexBufferMemory);
 
+  VkBuffer uniformBuffer;
+  VkBufferCreateInfo uniformBufferCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = sizeof(UniformBufferObject),
+      .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+  };
+  vkCreateBuffer(device, &uniformBufferCreateInfo, nullptr, &uniformBuffer);
+
+  VkMemoryRequirements uniformBufferMemoryRequirements;
+  vkGetBufferMemoryRequirements(device, uniformBuffer, &uniformBufferMemoryRequirements);
+
+  uint32_t uniformBufferMemoryTypeIndex;
+  for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+    if ((uniformBufferMemoryRequirements.memoryTypeBits & (1 << i)) &&
+        (memoryProperties.memoryTypes[i].propertyFlags & hostVisibleMemoryFlags) == hostVisibleMemoryFlags) {
+      uniformBufferMemoryTypeIndex = i;
+      break;
+    }
+  }
+
+  VkDeviceMemory uniformBufferMemory;
+  VkMemoryAllocateInfo uniformBufferMemoryAllocateInfo{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = uniformBufferMemoryRequirements.size,
+      .memoryTypeIndex = uniformBufferMemoryTypeIndex,
+  };
+  vkAllocateMemory(device, &uniformBufferMemoryAllocateInfo, nullptr, &uniformBufferMemory);
+  vkBindBufferMemory(device, uniformBuffer, uniformBufferMemory, 0);
+
+  void* uniformBufferMapped;
+  vkMapMemory(device, uniformBufferMemory, 0, sizeof(UniformBufferObject), 0, &uniformBufferMapped);
+
+  VkDescriptorPoolSize descriptorPoolSize{
+      .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .descriptorCount = 1,
+  };
+  VkDescriptorPoolCreateInfo descriptorPoolCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      .maxSets = 1,
+      .poolSizeCount = 1,
+      .pPoolSizes = &descriptorPoolSize,
+  };
+  VkDescriptorPool descriptorPool;
+  vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, nullptr, &descriptorPool);
+
+  VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = descriptorPool,
+      .descriptorSetCount = 1,
+      .pSetLayouts = &descriptorSetLayout,
+  };
+  VkDescriptorSet descriptorSet;
+  vkAllocateDescriptorSets(device, &descriptorSetAllocateInfo, &descriptorSet);
+
+  VkDescriptorBufferInfo uniformBufferDescriptorInfo{
+      .buffer = uniformBuffer,
+      .offset = 0,
+      .range = sizeof(UniformBufferObject),
+  };
+  VkWriteDescriptorSet uniformBufferWrite{
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet = descriptorSet,
+      .dstBinding = 0,
+      .descriptorCount = 1,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .pBufferInfo = &uniformBufferDescriptorInfo,
+  };
+  vkUpdateDescriptorSets(device, 1, &uniformBufferWrite, 0, nullptr);
+
   VkSemaphoreCreateInfo semaphoreCreateInfo{
       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
   };
@@ -514,6 +607,16 @@ int main() {
 
     uint32_t imageIndex;
     vkAcquireNextImageKHR(device, swapchain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+    static auto startTime = std::chrono::high_resolution_clock::now();
+    float elapsedTime = std::chrono::duration<float>(std::chrono::high_resolution_clock::now() - startTime).count();
+    UniformBufferObject ubo{
+        .model = glm::rotate(glm::mat4(1.0f), elapsedTime * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
+        .view = glm::lookAt(glm::vec3(4.0f, 4.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
+        .proj = glm::perspective(glm::radians(45.0f), static_cast<float>(extent.width) / static_cast<float>(extent.height), 0.1f, 10.0f),
+    };
+    ubo.proj[1][1] *= -1;
+    memcpy(uniformBufferMapped, &ubo, sizeof(ubo));
 
     vkResetCommandPool(device, commandPool, 0);
 
@@ -624,7 +727,7 @@ int main() {
         .extent = extent,
     };
     vkCmdSetScissorWithCount(commandBuffer, 1, &scissor);
-    vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_BACK_BIT);
+    vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_NONE);
     vkCmdSetFrontFace(commandBuffer, VK_FRONT_FACE_COUNTER_CLOCKWISE);
     vkCmdSetPrimitiveTopology(commandBuffer, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     vkCmdSetDepthTestEnable(commandBuffer, VK_TRUE);
@@ -634,6 +737,7 @@ int main() {
     VkDeviceSize vertexBufferOffset = 0;
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexBufferOffset);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
     vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(triangleIndices.size()), 1, 0, 0, 0);
 
     vkCmdEndRendering(commandBuffer);
@@ -703,11 +807,15 @@ int main() {
     vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
   }
   vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+  vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+  vkDestroyBuffer(device, uniformBuffer, nullptr);
+  vkFreeMemory(device, uniformBufferMemory, nullptr);
   vkDestroyBuffer(device, indexBuffer, nullptr);
   vkFreeMemory(device, indexBufferMemory, nullptr);
   vkDestroyBuffer(device, vertexBuffer, nullptr);
   vkFreeMemory(device, vertexBufferMemory, nullptr);
   vkDestroyCommandPool(device, commandPool, nullptr);
+  vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyShaderModule(device, shader, nullptr);
   vkDestroyPipeline(device, pipeline, nullptr);
